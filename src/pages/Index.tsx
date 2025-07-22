@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { WelcomeScreen } from "@/components/WelcomeScreen";
 import { LoginForm } from "@/components/LoginForm";
 import { InventoryScanner } from "@/components/InventoryScanner";
@@ -7,22 +7,31 @@ import { UserManagement } from "@/components/UserManagement";
 import { ReportsPanel } from "@/components/ReportsPanel";
 import { SettingsScreen } from "@/components/SettingsScreen";
 import { Navigation } from "@/components/Navigation";
+import { useAuth } from "@/hooks/useAuth";
 
 type AppScreen = "welcome" | "login" | "scanner" | "history" | "users" | "reports" | "settings";
 
 const Index = () => {
   const [currentScreen, setCurrentScreen] = useState<AppScreen>("welcome");
-  const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const { user, loading } = useAuth();
+
+  useEffect(() => {
+    if (user) {
+      setCurrentScreen("scanner");
+    } else if (!loading) {
+      setCurrentScreen("welcome");
+    }
+  }, [user, loading]);
 
   const handleLogin = () => {
-    setIsLoggedIn(true);
+    // Authentication is now handled by useAuth hook
     setCurrentScreen("scanner");
   };
 
   const handleNavigate = (screen: AppScreen) => {
     if (screen === "login") {
       setCurrentScreen("login");
-    } else if (screen === "scanner" && !isLoggedIn) {
+    } else if (screen === "scanner" && !user) {
       setCurrentScreen("login");
     } else {
       setCurrentScreen(screen);
@@ -55,10 +64,21 @@ const Index = () => {
     }
   };
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center">
+        <div className="text-center">
+          <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary mx-auto mb-4"></div>
+          <p className="text-muted-foreground">Carregando...</p>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="pb-20">
       {renderScreen()}
-      {isLoggedIn && currentScreen !== "login" && (
+      {user && currentScreen !== "login" && (
         <Navigation currentScreen={currentScreen} onNavigate={handleNavigate} />
       )}
     </div>

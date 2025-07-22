@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { QrCode, Plus, Minus, Package, MessageSquare, Save, Camera } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -6,24 +6,185 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Header } from "@/components/Header";
+import { BarcodeScanner } from "@/components/BarcodeScanner";
+import { useToast } from "@/components/ui/use-toast";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/hooks/useAuth";
 
 export const InventoryScanner = () => {
   const [quantity, setQuantity] = useState(1);
   const [scannedCode, setScannedCode] = useState("");
   const [observations, setObservations] = useState("");
-  const [isScanning, setIsScanning] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [currentSession, setCurrentSession] = useState<any>(null);
+  const [scannedCount, setScannedCount] = useState(0);
+  const [isSaving, setIsSaving] = useState(false);
+  const { user } = useAuth();
+  const { toast } = useToast();
+
+  useEffect(() => {
+    if (user) {
+      loadCurrentSession();
+    }
+  }, [user]);
+
+  const loadCurrentSession = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('inventory_sessions')
+        .select('*')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+
+      if (error && error.code !== 'PGRST116') {
+        console.error('Error loading session:', error);
+        return;
+      }
+
+      if (data) {
+        setCurrentSession(data);
+        loadScannedCount(data.id);
+      } else {
+        // Create new session if none exists
+        await createNewSession();
+      }
+    } catch (error) {
+      console.error('Error loading session:', error);
+    }
+  };
+
+  const createNewSession = async () => {
+    try {
+      const { data: profile } = await supabase
+        .from('profiles')
+        .select('company_id')
+        .eq('id', user?.id)
+        .single();
+
+      if (!profile?.company_id) {
+        toast({
+          title: "Erro",
+          description: "Perfil de usuário não encontrado",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      const { data, error } = await supabase
+        .from('inventory_sessions')
+        .insert({
+          name: `Sessão ${new Date().toLocaleDateString()}`,
+          company_id: profile.company_id,
+          created_by: user?.id,
+          status: 'active'
+        })
+        .select()
+        .single();
+
+      if (error) {
+        console.error('Error creating session:', error);
+        toast({
+          title: "Erro",
+          description: "Erro ao criar sessão de inventário",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      setCurrentSession(data);
+    } catch (error) {
+      console.error('Error creating session:', error);
+    }
+  };
+
+  const loadScannedCount = async (sessionId: string) => {
+    try {
+      const { data, error } = await supabase
+        .from('scanned_products')
+        .select('id', { count: 'exact' })
+        .eq('session_id', sessionId);
+
+      if (!error && data) {
+        setScannedCount(data.length);
+      }
+    } catch (error) {
+      console.error('Error loading scanned count:', error);
+    }
+  };
 
   const handleScan = () => {
-    setIsScanning(true);
-    // Simular scan
-    setTimeout(() => {
-      setScannedCode("7891000053904");
-      setIsScanning(false);
-    }, 2000);
+    setShowScanner(true);
+  };
+
+  const handleBarcodeScanned = (barcode: string) => {
+    setScannedCode(barcode);
+    setShowScanner(false);
+    toast({
+      title: "Código escaneado!",
+      description: `Código: ${barcode}`,
+    });
   };
 
   const incrementQuantity = () => setQuantity(prev => prev + 1);
   const decrementQuantity = () => setQuantity(prev => Math.max(1, prev - 1));
+
+  const handleSaveProduct = async () => {
+    if (!currentSession || !scannedCode || !user) {
+      toast({
+        title: "Erro",
+        description: "Dados incompletos para salvar produto",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsSaving(true);
+    try {
+      const { error } = await supabase
+        .from('scanned_products')
+        .insert({
+          session_id: currentSession.id,
+          barcode: scannedCode,
+          quantity: quantity,
+          notes: observations,
+          scanned_by: user.id,
+        });
+
+      if (error) {
+        console.error('Error saving product:', error);
+        toast({
+          title: "Erro",
+          description: "Erro ao salvar produto",
+          variant: "destructive",
+        });
+        return;
+      }
+
+      toast({
+        title: "Produto salvo!",
+        description: "Produto adicionado ao inventário",
+      });
+
+      // Reset form
+      setScannedCode("");
+      setQuantity(1);
+      setObservations("");
+      
+      // Update scanned count
+      setScannedCount(prev => prev + 1);
+    } catch (error) {
+      console.error('Error saving product:', error);
+      toast({
+        title: "Erro",
+        description: "Erro inesperado ao salvar produto",
+        variant: "destructive",
+      });
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background to-muted/30">
@@ -40,33 +201,20 @@ export const InventoryScanner = () => {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="bg-gradient-primary p-8 rounded-xl text-center text-white relative overflow-hidden">
-              {isScanning ? (
-                <div className="space-y-4">
-                  <div className="animate-pulse">
-                    <Camera className="h-12 w-12 mx-auto mb-2" />
-                    <p className="text-lg font-medium">Escaneando...</p>
-                  </div>
-                  <div className="bg-white/20 h-2 rounded-full overflow-hidden">
-                    <div className="h-full bg-white rounded-full animate-pulse"></div>
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <QrCode className="h-12 w-12 mx-auto" />
-                  <p className="text-lg font-medium">Toque para escanear</p>
-                  <p className="text-white/80 text-sm">Posicione o código de barras na câmera</p>
-                </div>
-              )}
+              <div className="space-y-4">
+                <QrCode className="h-12 w-12 mx-auto" />
+                <p className="text-lg font-medium">Toque para escanear</p>
+                <p className="text-white/80 text-sm">Posicione o código de barras na câmera</p>
+              </div>
             </div>
             
             <Button 
               onClick={handleScan}
-              disabled={isScanning}
               variant="hero"
               size="lg"
               className="w-full"
             >
-              {isScanning ? "Escaneando..." : "Iniciar Scanner"}
+              Iniciar Scanner
             </Button>
             
             {scannedCode && (
@@ -139,12 +287,14 @@ export const InventoryScanner = () => {
               </div>
               
               <Button 
+                onClick={handleSaveProduct}
+                disabled={isSaving}
                 variant="default"
                 size="lg"
                 className="w-full"
               >
                 <Save className="mr-2 h-4 w-4" />
-                Salvar Produto
+                {isSaving ? "Salvando..." : "Salvar Produto"}
               </Button>
             </CardContent>
           </Card>
@@ -155,15 +305,24 @@ export const InventoryScanner = () => {
           <CardContent className="p-4">
             <div className="flex justify-between items-center text-sm">
               <span className="text-muted-foreground">Sessão Atual:</span>
-              <span className="font-medium text-foreground">INV-001</span>
+              <span className="font-medium text-foreground">
+                {currentSession?.name || "Carregando..."}
+              </span>
             </div>
             <div className="flex justify-between items-center text-sm mt-2">
               <span className="text-muted-foreground">Produtos Escaneados:</span>
-              <span className="font-semibold text-primary">0</span>
+              <span className="font-semibold text-primary">{scannedCount}</span>
             </div>
           </CardContent>
         </Card>
       </div>
+      
+      {showScanner && (
+        <BarcodeScanner
+          onScan={handleBarcodeScanned}
+          onClose={() => setShowScanner(false)}
+        />
+      )}
     </div>
   );
 };
